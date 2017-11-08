@@ -1,0 +1,121 @@
+/*
+ * Copyright 2016-2017 original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.springframework.data.rest.webmvc;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import lombok.Value;
+
+import java.util.Date;
+import java.util.function.Supplier;
+
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.ExpectedException;
+import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnitRunner;
+import org.springframework.data.annotation.Version;
+import org.springframework.data.keyvalue.core.mapping.KeyValuePersistentEntity;
+import org.springframework.data.keyvalue.core.mapping.context.KeyValueMappingContext;
+import org.springframework.data.rest.webmvc.ResourceStatus.StatusAndHeaders;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+
+/**
+ * Unit tests for {@link ResourceStatus}.
+ * 
+ * @author Oliver Gierke
+ */
+@RunWith(MockitoJUnitRunner.class)
+public class ResourceStatusUnitTests {
+
+	ResourceStatus status;
+	KeyValuePersistentEntity<?, ?> entity;
+
+	@Mock HttpHeadersPreparer preparer;
+	@Mock Supplier<PersistentEntityResource> supplier;
+
+	public @Rule ExpectedException exception = ExpectedException.none();
+
+	@Before
+	public void setUp() {
+
+		this.status = ResourceStatus.of(preparer);
+
+		KeyValueMappingContext<?, ?> context = new KeyValueMappingContext<>();
+		this.entity = context.getRequiredPersistentEntity(Sample.class);
+
+		doReturn(new HttpHeaders()).when(preparer).prepareHeaders(eq(entity), any());
+	}
+
+	@Test(expected = IllegalArgumentException.class) // DATAREST-835
+	public void rejectsNullPreparer() {
+		ResourceStatus.of(null);
+	}
+
+	@Test // DATAREST-835
+	public void returnsModifiedIfNoHeadersGiven() {
+		assertModified(status.getStatusAndHeaders(new HttpHeaders(), new Sample(0), entity));
+	}
+
+	@Test // DATAREST-835
+	public void returnsNotModifiedForEntityWithRequestedETag() {
+
+		HttpHeaders headers = new HttpHeaders();
+		headers.setIfNoneMatch("\"1\"");
+
+		assertNotModified(status.getStatusAndHeaders(headers, new Sample(1), entity));
+	}
+
+	@Test // DATAREST-835
+	public void returnsNotModifiedIfEntityIsStillConsideredValid() {
+
+		doReturn(true).when(preparer).isObjectStillValid(any(), any(HttpHeaders.class));
+
+		assertNotModified(status.getStatusAndHeaders(new HttpHeaders(), new Sample(0), entity));
+	}
+
+	@Test // DATAREST-1121
+	public void rejectsInvalidPersistentEntityDomainObjectCombination() {
+
+		exception.expect(IllegalArgumentException.class);
+		exception.expectMessage(entity.getType().getName());
+
+		assertModified(status.getStatusAndHeaders(new HttpHeaders(), new Date(), entity));
+	}
+
+	private void assertModified(StatusAndHeaders statusAndHeaders) {
+
+		assertThat(statusAndHeaders.isModified()).isTrue();
+		assertThat(statusAndHeaders.toResponseEntity(supplier).getStatusCode()).isEqualTo(HttpStatus.OK);
+		verify(supplier).get();
+	}
+
+	private void assertNotModified(StatusAndHeaders statusAndHeaders) {
+
+		assertThat(statusAndHeaders.isModified()).isFalse();
+		assertThat(statusAndHeaders.toResponseEntity(supplier).getStatusCode()).isEqualTo(HttpStatus.NOT_MODIFIED);
+	}
+
+	@Value
+	static class Sample {
+		@Version int version;
+	}
+}
